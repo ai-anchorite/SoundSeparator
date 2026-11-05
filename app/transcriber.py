@@ -18,6 +18,8 @@ import numpy as np
 import soundfile as sf
 import torch
 
+from i18n import Status
+
 MODELS = {"small": "small", "medium": "medium", "large": "large-v3"}
 CLIP_PAD_SECONDS = 0.15  # セリフ前後の余白
 FADE_SECONDS = 0.01
@@ -35,7 +37,7 @@ class Transcriber:
         name = MODELS.get(size, "medium")
         if name not in self._models:
             if progress_cb:
-                progress_cb(0, f"音声認識モデルをダウンロード/読込中 (Whisper {name})...")
+                progress_cb(0, Status("status.whisper_load", "音声認識モデルをダウンロード/読込中 (Whisper {name})...", name=name))
             self._models[name] = whisper.load_model(name, device=self.device)
         return self._models[name]
 
@@ -58,7 +60,7 @@ class Transcriber:
                 mono16 = mono
 
             if progress_cb:
-                progress_cb(10, "文字起こし中... (長さによっては数分かかります)")
+                progress_cb(10, Status("status.transcribing", "文字起こし中... (長さによっては数分かかります)"))
             result = model.transcribe(
                 mono16,
                 language=language or None,
@@ -108,7 +110,7 @@ def assign_speakers(audio, sr, segments, num_speakers=0, progress_cb=None):
     from scipy.cluster.hierarchy import fcluster, linkage
 
     if progress_cb:
-        progress_cb(80, "話者を分析中...")
+        progress_cb(80, Status("status.speaker_analysis", "話者を分析中..."))
     if _voice_encoder is None:
         _voice_encoder = VoiceEncoder("cuda" if torch.cuda.is_available() else "cpu")
 
