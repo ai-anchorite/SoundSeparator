@@ -104,7 +104,7 @@ MODEL_TEXT = {
     "dbs_dnr": {
         "description": {
             "en": "Lightweight 3-stem video separation with input-adaptive band splitting.",
-            "zh-CN": "基于输入自适应频带分割的轻量级视频三分离。",
+            "zh-CN": "基于输入自适应频带分割的轻量级视频三分轨分离。",
         },
         "notes": {
             "en": "Research model. Output is mono; stereo positioning is not preserved.",
@@ -114,11 +114,11 @@ MODEL_TEXT = {
     "bs_roformer": {
         "description": {
             "en": "Vocal separation. In 6-stem mode, instruments are also split with Demucs.",
-            "zh-CN": "人声分离。六声部模式下还会用Demucs分离乐器。",
+            "zh-CN": "人声分离。六分轨模式下还会用Demucs分离乐器。",
         },
         "notes": {
             "en": "In 6-stem mode, htdemucs_6s is also fetched on first run (about 55 MB).",
-            "zh-CN": "六声部模式首次使用时还会获取 htdemucs_6s（约55MB）。",
+            "zh-CN": "六分轨模式首次使用时还会获取 htdemucs_6s（约55MB）。",
         },
     },
     "mel_band_roformer": {
@@ -128,7 +128,7 @@ MODEL_TEXT = {
         },
         "notes": {
             "en": "Which model sounds better depends on the source. In 6-stem mode, htdemucs_6s is used as well.",
-            "zh-CN": "模型优劣因音源而异。六声部模式下会并用 htdemucs_6s。",
+            "zh-CN": "模型优劣因音源而异。六分轨模式下会并用 htdemucs_6s。",
         },
     },
     "mega_53": {
@@ -138,7 +138,7 @@ MODEL_TEXT = {
         },
         "notes": {
             "en": "Categories overlap. Summing all stems does not reconstruct the original. A dedicated single-instrument model can be more accurate.",
-            "zh-CN": "类别之间有重叠，全部声部相加也无法还原原音源。专用模型可能精度更高。",
+            "zh-CN": "类别之间有重叠，全部分轨相加也无法还原原音源。专用模型可能精度更高。",
         },
     },
 }
