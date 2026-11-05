@@ -11,17 +11,38 @@ const fileInput = $("file-input");
 const tracksEl = $("tracks");
 const playBtn = $("play-btn");
 
+// ---------- 多言語UI ----------
+const t = (key, params) => I18N.t(key, params);
+const langParam = () => "lang=" + encodeURIComponent(I18N.current);
+I18N.init();
+
+// 言語セレクタの選択肢は読み込み済みlocaleから構築する
+const langSelect = $("lang-select");
+for (const locale of I18N.supported()) {
+  const option = document.createElement("option");
+  option.value = locale;
+  option.textContent = I18N.labels[locale] || locale;
+  langSelect.append(option);
+}
+langSelect.value = I18N.current;
+langSelect.addEventListener("change", () => I18N.setLocale(langSelect.value));
+document.addEventListener("i18nchange", () => {
+  langSelect.value = I18N.current;
+  renderRecentJobs();
+  refreshModelCatalog(); // カタログの説明文はサーバー側で ?lang= 翻訳される
+});
+
 // モデル一覧はサーバーを正とし、対応する目的だけを表示する。
 let modelCatalog = { models: [], defaults: {} };
 let lastSubmittedFile = null;
 let currentJobMetadata = null;
 let selectedModelByMode = {};
 let selectedStemNamesByModel = {};
-const MODE_INFO = {
-  dme: { title: "🎬 映像・動画音声", description: "話し声 / 効果音 / BGM" },
-  music: { title: "🎸 音楽・6ステム", description: "ボーカル / ドラム / ベース / ギター / ピアノ / その他" },
-  vocals: { title: "🎤 ボーカル・伴奏", description: "歌声と伴奏を、2つのトラックへ" },
-  mega: { title: "🔎 多楽器を探索", description: "53カテゴリから必要な楽器を選択" },
+const MODE_KEYS = {
+  dme: { title: "mode.dme.title", description: "mode.dme.desc" },
+  music: { title: "mode.music.title", description: "mode.music.desc" },
+  vocals: { title: "mode.vocals.title", description: "mode.vocals.desc" },
+  mega: { title: "mode.mega.title", description: "mode.mega.desc" },
 };
 
 function uiElement(tag, className, text) {
@@ -41,13 +62,13 @@ function renderModeOptions(preferredMode) {
   const activeMode = modes.has(preferredMode) ? preferredMode : [...modes][0];
   const container = $("mode-options");
   container.replaceChildren();
-  for (const [mode, info] of Object.entries(MODE_INFO)) {
+  for (const [mode, info] of Object.entries(MODE_KEYS)) {
     if (!modes.has(mode)) continue;
     const label = uiElement("label", "mode-card");
     const input = document.createElement("input");
     input.type = "radio"; input.name = "mode"; input.value = mode; input.checked = mode === activeMode;
     const body = uiElement("div", "mode-body");
-    body.append(uiElement("div", "mode-title", info.title), uiElement("div", "mode-desc", info.description));
+    body.append(uiElement("div", "mode-title", t(info.title)), uiElement("div", "mode-desc", t(info.description)));
     label.append(input, body);
     input.addEventListener("change", () => renderModelOptions());
     container.append(label);
@@ -67,7 +88,7 @@ function renderModelOptions() {
     radio.type = "radio"; radio.name = "model_id"; radio.value = m.id; radio.checked = m === selected;
     const body = uiElement("div", "model-card-body");
     const heading = uiElement("div", "model-card-heading");
-    heading.append(uiElement("strong", "", m.label), uiElement("span", "model-state" + (m.downloaded ? " ready" : ""), m.downloaded ? "取得済み" : "初回ダウンロード"));
+    heading.append(uiElement("strong", "", m.label), uiElement("span", "model-state" + (m.downloaded ? " ready" : ""), m.downloaded ? t("model.downloaded") : t("model.first_download")));
     body.append(heading, uiElement("p", "", m.description || ""));
     label.append(radio, body);
     radio.addEventListener("change", () => { selectedModelByMode[mode] = m.id; renderModelDetails(); });
@@ -83,11 +104,13 @@ function renderModelDetails() {
   $("stem-selector").classList.toggle("hidden", currentMode() !== "mega" || !model);
   if (!model) return;
   const facts = uiElement("div", "model-facts");
-  if (model.download_mb) facts.append(uiElement("span", "", `初回取得 約${model.download_mb >= 1000 ? (model.download_mb / 1000).toFixed(1) + " GB" : model.download_mb + " MB"}`));
-  if (model.vram_gb) facts.append(uiElement("span", "", `VRAM目安 ${model.vram_gb} GB以上`));
-  facts.append(uiElement("span", "", model.cached ? "メモリに読み込み済み" : "使用時に読み込み"));
+  if (model.download_mb) facts.append(uiElement("span", "", model.download_mb >= 1000
+    ? t("model.download_size_gb", { gb: (model.download_mb / 1000).toFixed(1) })
+    : t("model.download_size_mb", { mb: model.download_mb })));
+  if (model.vram_gb) facts.append(uiElement("span", "", t("model.vram", { gb: model.vram_gb })));
+  facts.append(uiElement("span", "", model.cached ? t("model.cached") : t("model.load_on_use")));
   if (model.source_url && /^https?:\/\//.test(model.source_url)) {
-    const link = uiElement("a", "model-source", "配布元 ↗");
+    const link = uiElement("a", "model-source", t("model.source"));
     link.href = model.source_url; link.target = "_blank"; link.rel = "noopener noreferrer";
     facts.append(link);
   }
@@ -121,24 +144,26 @@ function updateStemCount() {
   const n = inputs.length;
   const modelId = currentModel()?.id;
   if (currentMode() === "mega" && modelId) selectedStemNamesByModel[modelId] = inputs.map((input) => input.value);
-  $("stem-count").textContent = `${n} / ${$("stem-options").children.length} 選択`;
+  $("stem-count").textContent = t("stem.count", { n, total: $("stem-options").children.length });
 }
 
 function renderRuntime(runtime) {
   if (!runtime) return;
-  const gpu = runtime.gpu_name || (String(runtime.device).startsWith("cuda") ? "CUDA GPU" : "CPUモード");
-  $("runtime-status").textContent = `${runtime.busy ? "● 処理中" : "● 準備完了"} · ${gpu}`;
+  const gpu = runtime.gpu_name || (String(runtime.device).startsWith("cuda") ? "CUDA GPU" : t("runtime.cpu_mode"));
+  $("runtime-status").textContent = `${runtime.busy ? t("runtime.busy") : t("runtime.ready")} · ${gpu}`;
   $("runtime-status").classList.toggle("cpu-mode", !String(runtime.device).startsWith("cuda"));
-  $("runtime-memory").textContent = runtime.vram_total_gb ? `${Number(runtime.vram_allocated_gb || 0).toFixed(1)} / ${Number(runtime.vram_total_gb).toFixed(1)} GB 使用` : "AI処理に時間がかかります";
+  $("runtime-memory").textContent = runtime.vram_total_gb
+    ? t("runtime.vram_use", { used: Number(runtime.vram_allocated_gb || 0).toFixed(1), total: Number(runtime.vram_total_gb).toFixed(1) })
+    : t("runtime.cpu_slow_note");
   $("release-models").disabled = !!runtime.busy || !runtime.cached_models?.length;
 }
 
 async function refreshModelCatalog() {
   try {
-    const response = await fetch("/api/models", { cache: "no-store" });
-    if (!response.ok) throw new Error("モデル一覧を取得できません");
+    const response = await fetch(`/api/models?${langParam()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(t("error.catalog_fetch"));
     const catalog = await response.json();
-    if (!Array.isArray(catalog.models) || !catalog.models.length) throw new Error("利用できるモデルがありません");
+    if (!Array.isArray(catalog.models) || !catalog.models.length) throw new Error(t("error.no_models"));
     const mode = currentMode();
     const selected = currentModel();
     if (selected) selectedModelByMode[mode] = selected.id;
@@ -149,22 +174,39 @@ async function refreshModelCatalog() {
   } catch (error) {
     if (!modelCatalog.models.length) {
       modelCatalog = { models: [
-        { id: "bandit", label: "BandIt Plus", modes: ["dme"], description: "映像音声を3ステムに分離" },
-        { id: "bs_roformer", label: "BS-Roformer + Demucs", modes: ["music"], description: "音楽を6ステムに分離" },
+        { id: "bandit", label: "BandIt Plus", modes: ["dme"], description: t("catalog.bandit.desc") },
+        { id: "bs_roformer", label: "BS-Roformer + Demucs", modes: ["music"], description: t("catalog.bs_roformer.desc") },
       ], defaults: { dme: "bandit", music: "bs_roformer" } };
       renderModeOptions("dme");
     }
-    $("catalog-status").textContent = "モデル情報を取得できません。既存モデルで利用できます。";
-    $("runtime-status").textContent = "実行環境の情報を取得できません";
+    $("catalog-status").textContent = t("error.catalog_offline");
+    $("runtime-status").textContent = t("error.runtime_info");
     $("release-models").disabled = true;
   }
 }
 
-async function responseError(response, fallback) {
-  try {
-    const body = await response.json();
-    return new Error(typeof body.detail === "string" ? body.detail : body.message || `${fallback} (${response.status})`);
-  } catch (_) { return new Error(`${fallback} (${response.status})`); }
+// サーバーは detail (ja正本) に detail_key を併設する。キーがあれば翻訳を優先する。
+async function responseError(response, fallbackKey) {
+  let body = null;
+  try { body = await response.json(); } catch (_) {}
+  if (body) {
+    if (body.detail_key && I18N.has(body.detail_key)) return new Error(t(body.detail_key, body.detail_params));
+    if (typeof body.detail === "string" && body.detail) return new Error(body.detail);
+    if (body.message) return new Error(body.message);
+  }
+  return new Error(`${t(fallbackKey)} (${response.status})`);
+}
+
+async function responseDetail(response, fallbackKey) {
+  const body = await response.json().catch(() => ({}));
+  if (body.detail_key && I18N.has(body.detail_key)) return t(body.detail_key, body.detail_params);
+  return body.detail || t(fallbackKey);
+}
+
+// ジョブメッセージは status_key + status_params があれば翻訳、なければ ja の message をそのまま表示
+function jobMessage(job) {
+  if (job && job.status_key && I18N.has(job.status_key)) return t(job.status_key, job.status_params);
+  return (job && job.message) || "";
 }
 
 function separationOptions() {
@@ -176,14 +218,14 @@ function separationOptions() {
   if ($("preview-enabled").checked) {
     const start = $("preview-start").valueAsNumber;
     const length = $("preview-duration").valueAsNumber;
-    if (!Number.isFinite(start) || start < 0) throw new Error("プレビューの開始秒は0以上で指定してください");
-    if (!Number.isFinite(length) || length < 5 || length > 60) throw new Error("プレビューの長さは5〜60秒で指定してください");
+    if (!Number.isFinite(start) || start < 0) throw new Error(t("error.preview_start"));
+    if (!Number.isFinite(length) || length < 5 || length > 60) throw new Error(t("error.preview_length"));
     options.preview_start = start;
     options.preview_duration = length;
   }
   if (options.mode === "mega") {
     options.selected_stems = [...$("stem-options").querySelectorAll("input:checked")].map((input) => input.value);
-    if (!options.selected_stems.length) throw new Error("取り出す楽器を1つ以上選んでください");
+    if (!options.selected_stems.length) throw new Error(t("error.no_stems"));
   }
   return options;
 }
@@ -198,9 +240,12 @@ function jobForm(file, options) {
 }
 
 function optionsDescription(options) {
-  const quality = { fast: "高速", standard: "標準", high: "高品質" }[options.quality] || options.quality;
+  const quality = { fast: t("quality.fast"), standard: t("quality.standard"), high: t("quality.high") }[options.quality] || options.quality;
   const model = modelCatalog.models.find((m) => m.id === options.model_id);
-  return `${model?.label || options.model_id || MODE_INFO[options.mode]?.title || ""} · ${quality}${options.preview_duration ? ` · ${options.preview_start}秒から${options.preview_duration}秒間のプレビュー` : " · 全編"}`;
+  const title = model?.label || options.model_id || (MODE_KEYS[options.mode] ? t(MODE_KEYS[options.mode].title) : "");
+  return `${title} · ${quality}${options.preview_duration
+    ? ` · ${t("desc.preview", { start: options.preview_start, length: options.preview_duration })}`
+    : ` · ${t("desc.full")}`}`;
 }
 
 // 履歴にはジョブ情報だけを保存する。音声はサーバー内にあり、ブラウザには複製しない。
@@ -224,15 +269,19 @@ function renderRecentJobs() {
   items.forEach((item) => {
     const row = uiElement("div", "recent-row");
     const text = uiElement("div", "recent-label");
-    text.append(uiElement("strong", "", item.filename || "音声ファイル"), uiElement("span", "", `${item.model_label || ""}${item.is_preview ? " · プレビュー" : ""}${item.elapsed !== undefined ? ` · ${item.elapsed}秒` : ""}`));
+    const bits = [];
+    if (item.model_label) bits.push(item.model_label);
+    if (item.is_preview) bits.push(t("recent.preview_badge"));
+    if (item.elapsed !== undefined) bits.push(t("recent.elapsed", { sec: item.elapsed }));
+    text.append(uiElement("strong", "", item.filename || t("recent.audio_file")), uiElement("span", "", bits.join(" · ")));
     row.append(text);
-    const open = uiElement("button", "btn", item.status === "done" ? "編集を開く" : item.status === "error" ? "エラー" : "状況を確認");
+    const open = uiElement("button", "btn", item.status === "done" ? t("recent.open") : item.status === "error" ? t("recent.error") : t("recent.check"));
     open.disabled = item.status === "error";
     open.addEventListener("click", async () => {
       hideError();
       try {
-        const response = await fetch(`/api/jobs/${encodeURIComponent(item.id)}`);
-        if (!response.ok) throw new Error("結果が見つかりません。サーバーを再起動した場合は、ファイルをもう一度分離してください。");
+        const response = await fetch(`/api/jobs/${encodeURIComponent(item.id)}?${langParam()}`);
+        if (!response.ok) throw new Error(t("error.recent_gone"));
         const job = await response.json();
         rememberJob(job, item.filename);
         if (job.status === "error") throw new Error(job.message);
@@ -260,11 +309,11 @@ $("release-models").addEventListener("click", async () => {
   $("release-models").disabled = true;
   try {
     const response = await fetch("/api/models/release", { method: "POST" });
-    if (!response.ok) throw await responseError(response, "メモリを解放できません");
+    if (!response.ok) throw await responseError(response, "error.release_failed");
     const state = await response.json();
     renderRuntime(state.runtime || state);
     await refreshModelCatalog();
-    flashInfo("分離モデルのメモリを解放しました。次回使用時に読み込みます。");
+    flashInfo(t("toast.models_released"));
   } catch (error) { showError(error.message); await refreshModelCatalog(); }
 });
 $("retry-job").addEventListener("click", () => { if (lastSubmittedFile) startJob(lastSubmittedFile); });
@@ -376,7 +425,7 @@ async function startBatch(files) {
     row.className = "batch-row";
     row.innerHTML =
       `<span class="batch-name"></span>` +
-      `<span class="batch-status">待機中</span>` +
+      `<span class="batch-status">${t("batch.waiting")}</span>` +
       `<div class="batch-bar"><div class="batch-fill"></div></div>` +
       `<span class="batch-link"></span>`;
     row.querySelector(".batch-name").textContent = f.name;
@@ -390,24 +439,24 @@ async function startBatch(files) {
     const status = row.querySelector(".batch-status");
     const fill = row.querySelector(".batch-fill");
     try {
-      status.textContent = "アップロード中...";
+      status.textContent = t("status.uploading");
       const form = jobForm(files[i], options);
       const res = await fetch("/api/jobs", { method: "POST", body: form });
-      if (!res.ok) throw await responseError(res, "アップロード失敗");
+      if (!res.ok) throw await responseError(res, "error.upload_failed");
       const { id } = await res.json();
       rememberJob({ id, status: "queued", model_label: currentModel()?.label }, files[i].name);
 
       while (true) {
         await new Promise((r) => setTimeout(r, 1200));
-        const jr = await fetch("/api/jobs/" + id);
-        if (!jr.ok) throw new Error("ジョブ取得失敗");
+        const jr = await fetch(`/api/jobs/${id}?${langParam()}`);
+        if (!jr.ok) throw new Error(t("error.job_fetch"));
         const job = await jr.json();
-        status.textContent = job.message || "";
+        status.textContent = jobMessage(job);
         fill.style.width = (job.progress || 0) + "%";
-        if (job.status === "error") { rememberJob(job, files[i].name); throw new Error(job.message); }
+        if (job.status === "error") { rememberJob(job, files[i].name); throw new Error(jobMessage(job)); }
         if (job.status === "done") {
           rememberJob(job, files[i].name);
-          status.textContent = "✅ 完了";
+          status.textContent = t("batch.done");
           fill.style.width = "100%";
           const a = document.createElement("a");
           a.href = job.zip_url;
@@ -424,7 +473,7 @@ async function startBatch(files) {
       row.classList.add("batch-error");
     }
   }
-  flashInfo(`一括分離が完了しました (${ok}/${files.length}件成功) — 各行の⬇ZIPからダウンロードできます`);
+  flashInfo(t("toast.batch_done", { ok, total: files.length }));
 }
 
 $("batch-back").addEventListener("click", () => location.reload());
@@ -455,7 +504,7 @@ async function startJob(file) {
   uploadView.classList.add("hidden");
   progressView.classList.remove("hidden");
   $("progress-filename").textContent = file.name;
-  $("progress-message").textContent = "アップロード中...";
+  $("progress-message").textContent = t("status.uploading");
   $("progress-percent").textContent = "0%";
   $("progress-bar").style.width = "0%";
   $("progress-settings").textContent = optionsDescription(options);
@@ -465,7 +514,7 @@ async function startJob(file) {
 
   try {
     const res = await fetch("/api/jobs", { method: "POST", body: form });
-    if (!res.ok) throw await responseError(res, "アップロードに失敗しました");
+    if (!res.ok) throw await responseError(res, "error.upload_failed");
     const { id } = await res.json();
     rememberJob({ id, status: "queued", model_label: currentModel()?.label }, file.name);
     pollJob(id, file.name);
@@ -477,18 +526,18 @@ async function startJob(file) {
 
 async function pollJob(id, filename) {
   try {
-    const res = await fetch("/api/jobs/" + id);
-    if (!res.ok) throw new Error("ジョブ情報の取得に失敗しました");
+    const res = await fetch(`/api/jobs/${id}?${langParam()}`);
+    if (!res.ok) throw new Error(t("error.job_fetch"));
     const job = await res.json();
 
-    $("progress-message").textContent = job.message || "";
+    $("progress-message").textContent = jobMessage(job);
     $("progress-percent").textContent = (job.progress || 0) + "%";
     $("progress-bar").style.width = (job.progress || 0) + "%";
 
-    if (job.status === "error") { rememberJob(job, filename); throw new Error(job.message); }
+    if (job.status === "error") { rememberJob(job, filename); throw new Error(jobMessage(job)); }
     if (job.status === "done") {
       rememberJob(job, filename);
-      $("progress-message").textContent = "音声データを読み込み中...";
+      $("progress-message").textContent = t("status.loading_stems");
       await showResult(job, filename);
       return;
     }
@@ -527,13 +576,13 @@ async function showResult(job, filename) {
 
   const defs = [
     ...job.stems.map((s, i) => ({ ...s, defaultMuted: job.mode === "mega" && i > 0, isOriginal: false })),
-    { name: "original", label: "元音源", color: "#94a3b8", url: job.original_url, defaultMuted: true, isOriginal: true },
+    { name: "original", label: t("track.original"), color: "#94a3b8", url: job.original_url, defaultMuted: true, isOriginal: true },
   ];
 
   const buffers = await Promise.all(
     defs.map(async (d) => {
       const res = await fetch(d.url);
-      if (!res.ok) throw new Error(`${d.label}の音声を読み込めません (${res.status})`);
+      if (!res.ok) throw new Error(t("error.stem_load", { label: d.label, status: res.status }));
       const buf = await res.arrayBuffer();
       return audioCtx.decodeAudioData(buf);
     })
@@ -563,16 +612,19 @@ function renderResultMetadata() {
   el.classList.toggle("hidden", !meta);
   if (!meta) return;
   if (meta.model_label) el.append(uiElement("span", "result-model", meta.model_label));
-  const quality = { fast: "高速", standard: "標準", high: "高品質" }[meta.quality];
+  const quality = { fast: t("quality.fast"), standard: t("quality.standard"), high: t("quality.high") }[meta.quality];
   if (quality) el.append(uiElement("span", "", quality));
-  if (meta.elapsed !== undefined) el.append(uiElement("span", "", `処理 ${meta.elapsed}秒`));
-  if (meta.output_channels === 1) el.append(uiElement("span", "preview-badge", "モノラル出力 · 左右同音"));
+  if (meta.elapsed !== undefined) el.append(uiElement("span", "", t("result.elapsed", { sec: meta.elapsed })));
+  if (meta.output_channels === 1) el.append(uiElement("span", "preview-badge", t("result.mono")));
   if (meta.is_preview) {
     const actual = Number(meta.duration || duration());
     const requested = Number(meta.preview_duration || actual);
-    el.append(uiElement("span", "preview-badge", `プレビュー · 元音源の${Number(meta.preview_start || 0)}秒から${actual.toFixed(1)}秒間${Math.abs(actual - requested) > 0.1 ? `（指定 ${requested}秒・音源の末尾まで）` : ""} · 表示は0秒始まり`));
+    const parts = [t("result.preview_from", { start: Number(meta.preview_start || 0), dur: actual.toFixed(1) })];
+    if (Math.abs(actual - requested) > 0.1) parts.push(t("result.preview_short", { requested }));
+    parts.push(t("result.preview_zero"));
+    el.append(uiElement("span", "preview-badge", parts.join(" · ")));
   }
-  if (meta.mode === "mega") el.append(uiElement("p", "result-warning", "楽器カテゴリには重複があります。最初の1トラックだけ再生中です。ソロで切り替えて確認してください。全ステムを足しても元音源にはなりません。"));
+  if (meta.mode === "mega") el.append(uiElement("p", "result-warning", t("result.mega_warning")));
 }
 
 function bufToChans(buffer) {
@@ -612,22 +664,22 @@ function makeTrack(def, bufferOrChans) {
       <div class="track-title">
         <span class="track-dot" style="color:${def.color};background:${def.color}"></span>
         <span class="track-label">${def.label}</span>
-        <span class="gain-badge" title="波形表示の拡大倍率 (音量は変わりません)"></span>
+        <span class="gain-badge" title="${t("track.gain_title")}"></span>
       </div>
       <div class="track-controls">
-        <button class="ms-btn btn-m" title="ミュート">M</button>
-        <button class="ms-btn btn-s" title="ソロ">S</button>
-        <label class="exp-chk" title="「選択ステム保存」の対象に含める"><input type="checkbox" class="exp-input"${def.isOriginal ? "" : " checked"}>💾</label>
-        <button class="dl-btn" title="このステムをWAV保存 (編集内容を含む)">⬇</button>
-        ${def.isOriginal ? "" : '<button class="dl-btn sub-btn" title="このトラックをさらに分離 (ドラム細分化 / リード・バックボーカル)">🔬</button>'}
-        ${def.isOriginal ? "" : '<button class="dl-btn del-btn" title="トラックを削除">✕</button>'}
+        <button class="ms-btn btn-m" title="${t("track.mute")}">M</button>
+        <button class="ms-btn btn-s" title="${t("track.solo")}">S</button>
+        <label class="exp-chk" title="${t("track.export_title")}"><input type="checkbox" class="exp-input"${def.isOriginal ? "" : " checked"}>💾</label>
+        <button class="dl-btn" title="${t("track.download_title")}">⬇</button>
+        ${def.isOriginal ? "" : `<button class="dl-btn sub-btn" title="${t("track.subsep_title")}">🔬</button>`}
+        ${def.isOriginal ? "" : `<button class="dl-btn del-btn" title="${t("track.delete_title")}">✕</button>`}
       </div>
       <div class="track-vol">
-        <input type="range" class="vol-slider" min="-36" max="12" step="0.5" value="0" title="音量 (dB) — 右の欄で数値入力もできます">
-        <input type="number" class="vol-num" min="-60" max="12" step="0.5" value="0" title="音量をdBで直接入力">
+        <input type="range" class="vol-slider" min="-36" max="12" step="0.5" value="0" title="${t("track.vol_title")}">
+        <input type="number" class="vol-num" min="-60" max="12" step="0.5" value="0" title="${t("track.vol_num_title")}">
         <span class="vol-unit">dB</span>
       </div>
-      <div class="track-meter" title="出力レベル (音割れすると右端の●が赤く点灯)">
+      <div class="track-meter" title="${t("track.meter_title")}">
         <div class="meter-mask"></div>
         <span class="meter-clip">●</span>
       </div>
@@ -678,7 +730,7 @@ function makeTrack(def, bufferOrChans) {
   // ラベルのダブルクリックでリネーム
   track.labelEl = el.querySelector(".track-label");
   track.gainBadgeEl = el.querySelector(".gain-badge");
-  track.labelEl.title = "ダブルクリックで名前を変更";
+  track.labelEl.title = t("track.rename_title");
   track.labelEl.addEventListener("dblclick", () => renameTrack(track));
 
   attachSelectionHandlers(track);
@@ -697,7 +749,7 @@ function addTrack() {
   customTrackCount++;
   const def = {
     name: `custom${customTrackCount}`,
-    label: `新規トラック ${customTrackCount}`,
+    label: t("track.new", { n: customTrackCount }),
     color: TRACK_PALETTE[(customTrackCount - 1) % TRACK_PALETTE.length],
     defaultMuted: false,
     isOriginal: false,
@@ -721,7 +773,7 @@ function addTrack() {
   refreshAll();
   updateToolbar();
   updateZipBtn();
-  flashInfo(`「${track.label}」を追加しました — 移動・貼り付け先に使えます (取り消し履歴はリセット)`);
+  flashInfo(t("toast.track_added", { label: track.label }));
 }
 
 function renameTrack(track) {
@@ -751,8 +803,8 @@ function renameTrack(track) {
 
 function deleteTrack(track) {
   if (editorBusy) return;
-  if (tracks.filter((t) => !t.isOriginal).length <= 1) { showError("最後のステムトラックは削除できません"); return; }
-  if (!confirm(`トラック「${track.label}」を削除しますか？\n(取り消し履歴もリセットされます)`)) return;
+  if (tracks.filter((t) => !t.isOriginal).length <= 1) { showError(t("error.last_track")); return; }
+  if (!confirm(t("confirm.delete_track", { label: track.label }))) return;
   if (isPlaying) pause();
   try { track.gainNode.disconnect(); } catch (e) {}
   track.el.remove();
@@ -827,7 +879,7 @@ function layoutTrackCanvas(track) {
   if (track.displayGain == null) track.displayGain = computeDisplayGain(track);
   const gain = autoScale ? track.displayGain : 1;
   if (track.gainBadgeEl) {
-    track.gainBadgeEl.textContent = gain > 1.05 ? `表示×${gain < 10 ? gain.toFixed(1) : Math.round(gain)}` : "";
+    track.gainBadgeEl.textContent = gain > 1.05 ? t("track.display_gain", { gain: gain < 10 ? gain.toFixed(1) : Math.round(gain) }) : "";
   }
   const amp = (v) => clamp(v * gain, -1, 1) * mid * 0.92;
 
@@ -1180,8 +1232,8 @@ $("new-btn").addEventListener("click", () => location.reload());
 function toggleLoop() {
   loopMode = !loopMode;
   $("loop-btn").classList.toggle("active", loopMode);
-  if (loopMode && !selection) flashInfo("ループ再生ON — 範囲を選択するとその区間をリピートします");
-  else flashInfo(loopMode ? "選択範囲をループ再生します" : "ループ再生OFF");
+  if (loopMode && !selection) flashInfo(t("toast.loop_on_no_sel"));
+  else flashInfo(loopMode ? t("toast.loop_on") : t("toast.loop_off"));
 }
 $("loop-btn").addEventListener("click", toggleLoop);
 
@@ -1260,9 +1312,10 @@ function renderSelection() {
   const info = $("selection-info");
   if (selection) {
     const label = activeTrackIdx >= 0 ? tracks[activeTrackIdx].label : "-";
-    info.textContent = `選択: ${fmtTime(selection.start)} 〜 ${fmtTime(selection.end)} (${(selection.end - selection.start).toFixed(2)}秒) / 対象: ${label}`;
+    info.textContent = t("info.selection", { start: fmtTime(selection.start), end: fmtTime(selection.end), dur: (selection.end - selection.start).toFixed(2), label });
   } else if (activeTrackIdx >= 0) {
-    info.textContent = `編集対象: ${tracks[activeTrackIdx].label}` + (clipboard ? ` ／ クリップボード: ${clipboard.sourceLabel} ${(clipboard.length / sampleRate).toFixed(2)}秒` : "");
+    info.textContent = t("info.target", { label: tracks[activeTrackIdx].label }) +
+      (clipboard ? t("info.clipboard", { label: clipboard.sourceLabel, dur: (clipboard.length / sampleRate).toFixed(2) }) : "");
   } else {
     info.textContent = "";
   }
@@ -1366,7 +1419,7 @@ function grabSelection() {
 
 function doCut() {
   if (editorBusy) return;
-  if (activeTrackIdx < 0) { showError("対象トラックの波形をドラッグして選択してください"); return; }
+  if (activeTrackIdx < 0) { showError(t("error.select_track")); return; }
   if (isPlaying) pause();
   pushUndo();
   const se = grabSelection();
@@ -1376,19 +1429,19 @@ function doCut() {
   invalidateBuffers();
   refreshAll();
   updateToolbar();
-  flashInfo(`${clipboard.sourceLabel} から ${(clipboard.length / sampleRate).toFixed(2)}秒 を切り取りました — 貼り付け先のトラックをクリックして Ctrl+V`);
+  flashInfo(t("toast.cut", { label: clipboard.sourceLabel, dur: (clipboard.length / sampleRate).toFixed(2) }));
 }
 
 function doCopy() {
-  if (activeTrackIdx < 0) { showError("対象トラックの波形をドラッグして選択してください"); return; }
+  if (activeTrackIdx < 0) { showError(t("error.select_track")); return; }
   if (!grabSelection()) return;
   updateToolbar();
-  flashInfo(`${clipboard.sourceLabel} から ${(clipboard.length / sampleRate).toFixed(2)}秒 をコピーしました`);
+  flashInfo(t("toast.copied", { label: clipboard.sourceLabel, dur: (clipboard.length / sampleRate).toFixed(2) }));
 }
 
 function doPaste() {
   if (!clipboard || editorBusy) return;
-  if (activeTrackIdx < 0) { showError("貼り付け先のトラックをクリックして選択してください"); return; }
+  if (activeTrackIdx < 0) { showError(t("error.pick_paste_target")); return; }
   if (isPlaying) pause();
   pushUndo();
   mixInto(tracks[activeTrackIdx], clipboard);
@@ -1399,7 +1452,7 @@ function doPaste() {
   renderSelection();
   refreshAll();
   updateToolbar();
-  flashInfo(`${tracks[activeTrackIdx].label} へ同じ時間位置 (${fmtTime(s / sampleRate)}〜) にミックスしました`);
+  flashInfo(t("toast.pasted", { label: tracks[activeTrackIdx].label, time: fmtTime(s / sampleRate) }));
 }
 
 function mixInto(track, clip) {
@@ -1415,7 +1468,7 @@ function mixInto(track, clip) {
 
 function doMove(targetIdx) {
   if (editorBusy || targetIdx < 0 || targetIdx === activeTrackIdx) return;
-  if (activeTrackIdx < 0) { showError("移動元トラックの波形をドラッグして選択してください"); return; }
+  if (activeTrackIdx < 0) { showError(t("error.select_source_track")); return; }
   const se = selSamples();
   if (!se) return;
   if (isPlaying) pause();
@@ -1430,14 +1483,14 @@ function doMove(targetIdx) {
   invalidateBuffers();
   refreshAll();
   updateToolbar();
-  flashInfo(`${src.label} → ${tracks[targetIdx].label} へ ${(clip.length / sampleRate).toFixed(2)}秒 を移動しました`);
+  flashInfo(t("toast.moved", { from: src.label, to: tracks[targetIdx].label, dur: (clip.length / sampleRate).toFixed(2) }));
 }
 
 function doRippleDelete() {
   const se = selSamples();
   if (!se || editorBusy) return;
   const [s, e] = se;
-  if (e - s >= lengthSamples) { showError("全体を削除することはできません"); return; }
+  if (e - s >= lengthSamples) { showError(t("error.cannot_delete_all")); return; }
   if (isPlaying) pause();
   pushUndo();
   tracks.forEach((t) => {
@@ -1453,20 +1506,20 @@ function doRippleDelete() {
   playOffset = Math.min(s / sampleRate, duration());
   clearSelection();
   refreshAll();
-  flashInfo(`全トラックから ${((e - s) / sampleRate).toFixed(2)}秒 を削除して詰めました`);
+  flashInfo(t("toast.rippled", { dur: ((e - s) / sampleRate).toFixed(2) }));
 }
 
 function doSilence() {
   const se = selSamples();
   if (!se || editorBusy) return;
-  if (activeTrackIdx < 0) { showError("無音化するトラックを選択してください (波形をドラッグしたトラックが対象)"); return; }
+  if (activeTrackIdx < 0) { showError(t("error.pick_silence_target")); return; }
   const [s, e] = se;
   if (isPlaying) pause();
   pushUndo();
   fadeZero(tracks[activeTrackIdx].chans, s, e);
   invalidateBuffers();
   refreshAll();
-  flashInfo(`${tracks[activeTrackIdx].label} の ${((e - s) / sampleRate).toFixed(2)}秒 を除去しました (尺・クリップボードは不変)`);
+  flashInfo(t("toast.silenced", { label: tracks[activeTrackIdx].label, dur: ((e - s) / sampleRate).toFixed(2) }));
 }
 
 // ---------- 無音カット ----------
@@ -1512,10 +1565,10 @@ function doSilenceCut(thresholdDb, minLenSec, padSec) {
     }
   }
 
-  if (!regions.length) { showError("条件に合う無音区間が見つかりませんでした"); return; }
+  if (!regions.length) { showError(t("error.no_silence")); return; }
 
   const total = regions.reduce((a, [s, e]) => a + (e - s), 0);
-  if (total >= lengthSamples) { showError("全体が無音と判定されました。しきい値を下げてください"); return; }
+  if (total >= lengthSamples) { showError(t("error.all_silent")); return; }
 
   if (isPlaying) pause();
   pushUndo();
@@ -1536,20 +1589,20 @@ function doSilenceCut(thresholdDb, minLenSec, padSec) {
   playOffset = 0;
   clearSelection();
   refreshAll();
-  flashInfo(`${regions.length}箇所 / 合計 ${(total / sampleRate).toFixed(2)}秒 の無音を削除しました`);
+  flashInfo(t("toast.silence_cut", { count: regions.length, dur: (total / sampleRate).toFixed(2) }));
 }
 
 // ---------- ノイズ除去 ----------
 async function doDenoise(scope, strength) {
   const se = selSamples();
-  if (!se) { showError("先にノイズだけが鳴っている区間をドラッグで選択してください"); return; }
+  if (!se) { showError(t("error.pick_noise_range")); return; }
   if (editorBusy) return;
 
   let targets;
   if (scope === "all") {
     targets = tracks.filter((t) => !t.isOriginal);
   } else {
-    if (activeTrackIdx < 0) { showError("対象トラックを選択してください"); return; }
+    if (activeTrackIdx < 0) { showError(t("error.pick_target")); return; }
     targets = [tracks[activeTrackIdx]];
   }
 
@@ -1561,7 +1614,7 @@ async function doDenoise(scope, strength) {
   try {
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
-      flashInfo(`ノイズ除去中 (${t.label})... ${i + 1}/${targets.length}`);
+      flashInfo(t("status.denoising_track", { label: t.label, index: i + 1, total: targets.length }));
       const wav = encodeWav(t.chans, sampleRate);
       const form = new FormData();
       form.append("file", new Blob([wav], { type: "audio/wav" }), "track.wav");
@@ -1570,8 +1623,7 @@ async function doDenoise(scope, strength) {
       form.append("strength", String(strength));
       const res = await fetch("/api/denoise", { method: "POST", body: form });
       if (!res.ok) {
-        const detail = await res.json().catch(() => ({}));
-        throw new Error(detail.detail || "ノイズ除去に失敗しました");
+        throw new Error(await responseDetail(res, "error.denoise_failed"));
       }
       const buf = await audioCtx.decodeAudioData(await res.arrayBuffer());
       const chans = [];
@@ -1585,7 +1637,7 @@ async function doDenoise(scope, strength) {
     }
     invalidateBuffers();
     refreshAll();
-    flashInfo("ノイズ除去が完了しました");
+    flashInfo(t("toast.denoise_done"));
   } catch (err) {
     showError(err.message);
     // 失敗時は undo で戻せる状態を維持
@@ -1597,18 +1649,18 @@ async function doDenoise(scope, strength) {
 
 // ---------- 修復・エフェクト ----------
 const REPAIR_NOTES = {
-  declick: "短いインパルス性ノイズ (マウスクリック音・リップノイズ・プチ音) を検出して補間します",
-  dereverb: "AIモデル (MelBand Roformer, SDR 19.17) で響き・残響を除去します。初回はモデルのダウンロード (約800MB) に時間がかかります",
-  dehum: "電源由来のブーンというノイズ (50/60Hzと倍音) をノッチフィルタで除去します",
-  fadein: "選択範囲の音量を 0 から徐々に上げます",
-  fadeout: "選択範囲の音量を徐々に 0 へ下げます",
-  normalize: "選択範囲のピークが -1dB になるよう音量を揃えます",
-  loudnorm: "トラック全体を配信プラットフォームの基準ラウドネス (LUFS) に合わせます。範囲選択は不要です (ITU-R BS.1770準拠、クリップ防止付き)",
-  pitchshift: "選択したトラック全体のピッチを半音単位で上下します (長さは変わりません)。RVC素材のキー合わせ等に。範囲選択は不要です",
-  tempo: "全トラックのテンポをまとめて変更します (ピッチは保たれ、尺が変わります)。範囲選択は不要です。取り消し履歴で戻せます",
+  declick: "repair.note.declick",
+  dereverb: "repair.note.dereverb",
+  dehum: "repair.note.dehum",
+  fadein: "repair.note.fadein",
+  fadeout: "repair.note.fadeout",
+  normalize: "repair.note.normalize",
+  loudnorm: "repair.note.loudnorm",
+  pitchshift: "repair.note.pitchshift",
+  tempo: "repair.note.tempo",
 };
 
-async function applyWholeTrackServerEffect(track, effect, extraForm, busyMsg) {
+async function applyWholeTrackServerEffect(track, effect, extraForm, errorKey) {
   // トラック全体をサーバー処理して差し替える (長さ変化も許容)
   const form = new FormData();
   form.append("file", new Blob([encodeWav(track.chans, sampleRate)], { type: "audio/wav" }), "track.wav");
@@ -1616,8 +1668,7 @@ async function applyWholeTrackServerEffect(track, effect, extraForm, busyMsg) {
   for (const [k, v] of Object.entries(extraForm)) form.append(k, v);
   const res = await fetch("/api/effect", { method: "POST", body: form });
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({}));
-    throw new Error(detail.detail || `${busyMsg}に失敗しました`);
+    throw new Error(await responseDetail(res, errorKey));
   }
   const buf = await audioCtx.decodeAudioData(await res.arrayBuffer());
   const chans = [];
@@ -1627,9 +1678,9 @@ async function applyWholeTrackServerEffect(track, effect, extraForm, busyMsg) {
 }
 
 async function applyPitchShift() {
-  if (activeTrackIdx < 0) { showError("対象トラックをクリックして選択してください"); return; }
+  if (activeTrackIdx < 0) { showError(t("error.click_target")); return; }
   const steps = parseFloat($("rp-pitch").value) || 0;
-  if (steps === 0) { showError("半音数を入力してください (例: +2, -1.5)"); return; }
+  if (steps === 0) { showError(t("error.enter_semitones")); return; }
   if (editorBusy) return;
   const track = tracks[activeTrackIdx];
   if (isPlaying) pause();
@@ -1637,8 +1688,9 @@ async function applyPitchShift() {
   updateToolbar();
   pushUndo();
   try {
-    flashInfo(`${track.label} のピッチを ${steps > 0 ? "+" : ""}${steps} 半音シフト中...`);
-    const chans = await applyWholeTrackServerEffect(track, "pitchshift", { param: steps }, "ピッチ変更");
+    const sign = steps > 0 ? "+" : "";
+    flashInfo(t("status.pitch_shifting", { label: track.label, steps: `${sign}${steps}` }));
+    const chans = await applyWholeTrackServerEffect(track, "pitchshift", { param: steps }, "error.pitch_failed");
     // 長さは不変のはずだが念のため合わせる
     track.chans = chans.map((c) => {
       const out = new Float32Array(lengthSamples);
@@ -1647,7 +1699,7 @@ async function applyPitchShift() {
     });
     invalidateBuffers();
     refreshAll();
-    flashInfo(`${track.label}: ピッチを ${steps > 0 ? "+" : ""}${steps} 半音変更しました`);
+    flashInfo(t("toast.pitch_done", { label: track.label, steps: `${sign}${steps}` }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -1658,7 +1710,7 @@ async function applyPitchShift() {
 
 async function applyTempo() {
   const percent = parseFloat($("rp-tempo").value) || 100;
-  if (percent === 100) { showError("速度を100%以外にしてください"); return; }
+  if (percent === 100) { showError(t("error.tempo_not_100")); return; }
   if (editorBusy) return;
   const rate = clamp(percent / 100, 0.5, 2.0);
   if (isPlaying) pause();
@@ -1669,8 +1721,8 @@ async function applyTempo() {
     const targets = tracks;
     const newChans = [];
     for (let i = 0; i < targets.length; i++) {
-      flashInfo(`テンポ変更中 (${targets[i].label})... ${i + 1}/${targets.length}`);
-      newChans.push(await applyWholeTrackServerEffect(targets[i], "tempo", { param: rate }, "テンポ変更"));
+      flashInfo(t("status.tempo_changing", { label: targets[i].label, index: i + 1, total: targets.length }));
+      newChans.push(await applyWholeTrackServerEffect(targets[i], "tempo", { param: rate }, "error.tempo_failed"));
     }
     lengthSamples = Math.max(...newChans.map((cs) => cs[0].length));
     targets.forEach((t, i) => {
@@ -1684,7 +1736,7 @@ async function applyTempo() {
     playOffset = 0;
     clearSelection();
     refreshAll();
-    flashInfo(`全トラックのテンポを ${percent}% に変更しました (Ctrl+Zで戻せます)`);
+    flashInfo(t("toast.tempo_done", { percent }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -1710,27 +1762,26 @@ function applyClientEffect(track, s, e, effect) {
 }
 
 async function applyLoudnorm() {
-  if (activeTrackIdx < 0) { showError("対象トラックをクリックして選択してください"); return; }
+  if (activeTrackIdx < 0) { showError(t("error.click_target")); return; }
   if (editorBusy) return;
   const track = tracks[activeTrackIdx];
   const platform = $("rp-platform").value;
   const target = platform === "custom" ? parseFloat($("rp-lufs").value) : parseFloat(platform);
-  if (isNaN(target)) { showError("目標LUFSが不正です"); return; }
+  if (isNaN(target)) { showError(t("error.bad_lufs")); return; }
   if (isPlaying) pause();
 
   editorBusy = true;
   updateToolbar();
   pushUndo();
   try {
-    flashInfo(`${track.label} のラウドネスを測定・調整中...`);
+    flashInfo(t("status.loudness_measuring", { label: track.label }));
     const form = new FormData();
     form.append("file", new Blob([encodeWav(track.chans, sampleRate)], { type: "audio/wav" }), "track.wav");
     form.append("effect", "loudnorm");
     form.append("target_lufs", String(target));
     const res = await fetch("/api/effect", { method: "POST", body: form });
     if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || "ラウドネス調整に失敗しました");
+      throw new Error(await responseDetail(res, "error.loudnorm_failed"));
     }
     const measured = res.headers.get("X-Measured-LUFS");
     const gainDb = res.headers.get("X-Applied-Gain-DB");
@@ -1745,7 +1796,7 @@ async function applyLoudnorm() {
     track.chans = chans;
     invalidateBuffers();
     refreshAll();
-    flashInfo(`${track.label}: ${measured} LUFS → 目標 ${target} LUFS (ゲイン ${gainDb > 0 ? "+" : ""}${gainDb}dB)`);
+    flashInfo(t("toast.loudnorm_done", { label: track.label, measured, target, gain: `${gainDb > 0 ? "+" : ""}${gainDb}dB` }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -1761,8 +1812,8 @@ async function applyRepair() {
   if (effect === "tempo") return applyTempo();
 
   const se = selSamples();
-  if (!se) { showError("先に修復したい範囲をドラッグで選択してください"); return; }
-  if (activeTrackIdx < 0) { showError("対象トラックの波形をドラッグして選択してください"); return; }
+  if (!se) { showError(t("error.pick_repair_range")); return; }
+  if (activeTrackIdx < 0) { showError(t("error.select_track")); return; }
   if (editorBusy) return;
 
   const mix = parseFloat($("rp-mix").value);
@@ -1776,7 +1827,7 @@ async function applyRepair() {
     applyClientEffect(track, s, e, effect);
     invalidateBuffers();
     refreshAll();
-    flashInfo(`${track.label} に ${$("rp-effect").selectedOptions[0].textContent} を適用しました`);
+    flashInfo(t("toast.effect_applied", { label: track.label, effect: $("rp-effect").selectedOptions[0].textContent }));
     return;
   }
 
@@ -1796,13 +1847,10 @@ async function applyRepair() {
     form.append("sensitivity", $("rp-sensitivity").value);
     form.append("base_freq", $("rp-humfreq").value);
 
-    flashInfo(effect === "dereverb"
-      ? "リバーブ除去中... (初回はモデルのダウンロードで数分かかることがあります)"
-      : "処理中...");
+    flashInfo(effect === "dereverb" ? t("status.dereverb_first") : t("status.processing"));
     const res = await fetch("/api/effect", { method: "POST", body: form });
     if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || "修復処理に失敗しました");
+      throw new Error(await responseDetail(res, "error.repair_failed"));
     }
     const buf = await audioCtx.decodeAudioData(await res.arrayBuffer());
 
@@ -1820,7 +1868,7 @@ async function applyRepair() {
     });
     invalidateBuffers();
     refreshAll();
-    flashInfo(`${track.label} の ${(n / sampleRate).toFixed(2)}秒 を修復しました`);
+    flashInfo(t("toast.repaired", { label: track.label, dur: (n / sampleRate).toFixed(2) }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -1835,11 +1883,11 @@ let subsepBusy = false;
 
 function openSubsepPanel(track) {
   subsepTrack = track;
-  $("ss-track-label").textContent = `「${track.label}」`;
-  // トラック名から種類を推定
-  if (track.name === "vocals" || track.name === "dialog" || /ボーカル|声/.test(track.label)) {
+  $("ss-desc").textContent = t("panel.ss.desc", { label: track.label });
+  // トラック名から種類を推定 (ラベルは表示言語に応じてja/en両方を判定する)
+  if (track.name === "vocals" || track.name === "dialog" || /ボーカル|声|vocal|voice|dialog/i.test(track.label)) {
     $("ss-kind").value = "vocals";
-  } else if (track.name === "drums" || /ドラム/.test(track.label)) {
+  } else if (track.name === "drums" || /ドラム|drum/i.test(track.label)) {
     $("ss-kind").value = "drums";
   }
   togglePanel("panel-subsep");
@@ -1852,26 +1900,26 @@ async function runSubsep() {
   subsepBusy = true;
   $("ss-run").disabled = true;
   try {
-    flashInfo(`${src.label} をアップロード中...`);
+    flashInfo(t("status.uploading_track", { label: src.label }));
     const form = new FormData();
     form.append("file", new Blob([encodeWav(src.chans, sampleRate)], { type: "audio/wav" }), "track.wav");
     form.append("kind", kind);
     const res = await fetch("/api/subseparate", { method: "POST", body: form });
-    if (!res.ok) throw new Error("分離の開始に失敗しました (" + res.status + ")");
+    if (!res.ok) throw await responseError(res, "error.subsep_start");
     const { id } = await res.json();
 
     let job;
     while (true) {
       await new Promise((r) => setTimeout(r, 1500));
-      const jr = await fetch("/api/jobs/" + id);
-      if (!jr.ok) throw new Error("ジョブ情報の取得に失敗しました");
+      const jr = await fetch(`/api/jobs/${id}?${langParam()}`);
+      if (!jr.ok) throw new Error(t("error.job_fetch"));
       job = await jr.json();
-      if (job.status === "error") throw new Error(job.message);
+      if (job.status === "error") throw new Error(jobMessage(job));
       if (job.status === "done") break;
-      flashInfo(`追加分離: ${job.message || ""}`);
+      flashInfo(t("toast.subsep_progress", { message: jobMessage(job) }));
     }
 
-    flashInfo("音声データを読み込み中...");
+    flashInfo(t("status.loading_stems"));
     const buffers = await Promise.all(
       job.stems.map(async (s) => audioCtx.decodeAudioData(await (await fetch(s.url)).arrayBuffer()))
     );
@@ -1897,7 +1945,7 @@ async function runSubsep() {
     updateToolbar();
     updateZipBtn();
     togglePanel("panel-subsep");
-    flashInfo(`${src.label} を ${job.stems.length}トラックに分離しました (元トラックはミュート・取り消し履歴はリセット)`);
+    flashInfo(t("toast.subsep_done", { label: src.label, count: job.stems.length }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -1927,19 +1975,18 @@ function openMidiPanel() {
 async function runMidiExport() {
   if (midiBusy) return;
   const track = tracks[parseInt($("md-track").value, 10)];
-  if (!track) { showError("対象トラックを選択してください"); return; }
+  if (!track) { showError(t("error.pick_target")); return; }
   midiBusy = true;
   $("md-run").disabled = true;
   try {
-    flashInfo(`${track.label} を採譜中... (数十秒かかることがあります)`);
+    flashInfo(t("status.transcribing_midi", { label: track.label }));
     const form = new FormData();
     form.append("file", new Blob([encodeWav(track.chans, sampleRate)], { type: "audio/wav" }), "track.wav");
     form.append("onset", $("md-sens").value);
     form.append("min_note_ms", $("md-minnote").value);
     const res = await fetch("/api/midi", { method: "POST", body: form });
     if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || "MIDI書き出しに失敗しました (" + res.status + ")");
+      throw new Error(await responseDetail(res, "error.midi_failed"));
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -1948,7 +1995,7 @@ async function runMidiExport() {
     a.download = `${baseFilename}_${track.label}.mid`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-    flashInfo(`${track.label} のMIDIをダウンロードしました`);
+    flashInfo(t("toast.midi_done", { label: track.label }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -1991,28 +2038,34 @@ function dialogueForm(track, extra) {
 async function pollDialogueJob(id) {
   while (true) {
     await new Promise((r) => setTimeout(r, 1500));
-    const jr = await fetch("/api/jobs/" + id);
-    if (!jr.ok) throw new Error("ジョブ情報の取得に失敗しました");
+    const jr = await fetch(`/api/jobs/${id}?${langParam()}`);
+    if (!jr.ok) throw new Error(t("error.job_fetch"));
     const job = await jr.json();
-    if (job.status === "error") throw new Error(job.message);
+    if (job.status === "error") throw new Error(jobMessage(job));
     if (job.status === "done") return job;
-    flashInfo(`セリフ書き出し: ${job.message || ""}`);
+    flashInfo(t("toast.dialogue_progress", { message: jobMessage(job) }));
   }
 }
 
 const SPEAKER_COLORS = { "話者A": "#38bdf8", "話者B": "#f472b6", "話者C": "#a3e635", "話者D": "#fbbf24", "話者E": "#c084fc", "話者F": "#fb923c", "話者G": "#34d399", "話者H": "#f87171" };
 
+// サーバー側の話者名 (話者A...) は正本のまま扱い、表示だけ現在の言語に合わせる
+function speakerDisplayName(name) {
+  const match = /^話者([A-Z])$/.exec(name);
+  return match ? t("speaker.name", { letter: match[1] }) : name;
+}
+
 async function runDialogueAnalyze() {
   if (dialogueBusy) return;
   const trackIdx = parseInt($("dg-track").value, 10);
   const track = tracks[trackIdx];
-  if (!track) { showError("対象トラックを選択してください"); return; }
+  if (!track) { showError(t("error.pick_target")); return; }
 
   dialogueBusy = true;
   $("dg-run").disabled = true;
   $("dg-result").classList.add("hidden");
   try {
-    flashInfo(`${track.label} を解析中...`);
+    flashInfo(t("status.analyzing", { label: track.label }));
     const form = dialogueForm(track, {
       action: "analyze",
       auto_adjust: $("dg-adjust").checked,
@@ -2022,7 +2075,7 @@ async function runDialogueAnalyze() {
       num_speakers: $("dg-spknum").value,
     });
     const res = await fetch("/api/dialogue-export", { method: "POST", body: form });
-    if (!res.ok) throw new Error("解析の開始に失敗しました (" + res.status + ")");
+    if (!res.ok) throw await responseError(res, "error.analyze_start");
     const { id } = await res.json();
     const job = await pollDialogueJob(id);
 
@@ -2030,7 +2083,7 @@ async function runDialogueAnalyze() {
     dialogueTrackIdx = trackIdx;
     renderDialogueList(job.language);
     $("dg-result").classList.remove("hidden");
-    flashInfo(`${dialogueSegments.length}件のセリフを検出しました。一覧で確認・調整して「② 書き出し」へ`);
+    flashInfo(t("toast.dialogue_detected", { count: dialogueSegments.length }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -2044,10 +2097,9 @@ function renderDialogueList(language) {
   const maxL = parseFloat($("dg-max").value) || Infinity;
   const durs = dialogueSegments.map((s) => s.end - s.start);
   const total = durs.reduce((a, b) => a + b, 0);
-  $("dg-summary").textContent =
-    `${dialogueSegments.length}件 / 合計 ${total.toFixed(1)}秒` +
-    (language ? ` / 言語: ${language}` : "") +
-    ` / 長さ ${Math.min(...durs).toFixed(1)}〜${Math.max(...durs).toFixed(1)}秒`;
+  $("dg-summary").textContent = language
+    ? t("dialogue.summary_lang", { count: dialogueSegments.length, total: total.toFixed(1), lang: language, min: Math.min(...durs).toFixed(1), max: Math.max(...durs).toFixed(1) })
+    : t("dialogue.summary", { count: dialogueSegments.length, total: total.toFixed(1), min: Math.min(...durs).toFixed(1), max: Math.max(...durs).toFixed(1) });
 
   const list = $("dg-segments");
   list.innerHTML = "";
@@ -2057,18 +2109,18 @@ function renderDialogueList(language) {
     const row = document.createElement("div");
     row.className = "dg-seg" + ($("dg-adjust").checked && (dur < minL || dur > maxL) ? " dg-warn" : "");
     const spkHtml = hasSpeakers
-      ? `<select class="dg-spk" title="話者 (間違っていたらここで修正)">${Object.keys(SPEAKER_COLORS).map((n) => `<option value="${n}"${n === seg.speaker ? " selected" : ""}>${n}</option>`).join("")}</select>`
+      ? `<select class="dg-spk" title="${t("dialogue.speaker_title")}">${Object.keys(SPEAKER_COLORS).map((n) => `<option value="${n}"${n === seg.speaker ? " selected" : ""}>${speakerDisplayName(n)}</option>`).join("")}</select>`
       : "";
     row.innerHTML =
-      `<button class="dg-play" title="この位置へジャンプ+範囲選択">▶</button>` +
+      `<button class="dg-play" title="${t("dialogue.play_title")}">▶</button>` +
       `<span class="dg-idx">${String(i + 1).padStart(3, "0")}</span>` +
       spkHtml +
-      `<input class="dg-in dg-start" type="number" step="0.05" min="0" value="${seg.start.toFixed(2)}" title="開始秒">` +
+      `<input class="dg-in dg-start" type="number" step="0.05" min="0" value="${seg.start.toFixed(2)}" title="${t("dialogue.start_title")}">` +
       `<span class="dg-sep">〜</span>` +
-      `<input class="dg-in dg-end" type="number" step="0.05" min="0" value="${seg.end.toFixed(2)}" title="終了秒">` +
+      `<input class="dg-in dg-end" type="number" step="0.05" min="0" value="${seg.end.toFixed(2)}" title="${t("dialogue.end_title")}">` +
       `<span class="dg-dur">${dur.toFixed(1)}s</span>` +
-      `<input class="dg-text-in" type="text" value="" title="テキスト (直接編集できます)">` +
-      `<button class="dg-del" title="この行を書き出しから除外">✕</button>`;
+      `<input class="dg-text-in" type="text" value="" title="${t("dialogue.text_title")}">` +
+      `<button class="dg-del" title="${t("dialogue.exclude_title")}">✕</button>`;
     row.querySelector(".dg-text-in").value = seg.text;
     const spkSel = row.querySelector(".dg-spk");
     if (spkSel) {
@@ -2106,12 +2158,12 @@ function renderDialogueList(language) {
 async function runDialogueExportFiles() {
   if (dialogueBusy) return;
   const track = tracks[dialogueTrackIdx];
-  if (!track || !dialogueSegments.length) { showError("先に「① 解析」を実行してください"); return; }
+  if (!track || !dialogueSegments.length) { showError(t("error.analyze_first")); return; }
 
   dialogueBusy = true;
   $("dg-export").disabled = true;
   try {
-    flashInfo("書き出し中...");
+    flashInfo(t("status.exporting"));
     const form = dialogueForm(track, {
       action: "export",
       segments: JSON.stringify(dialogueSegments),
@@ -2121,7 +2173,7 @@ async function runDialogueExportFiles() {
       mono_clips: $("dg-mono").checked,
     });
     const res = await fetch("/api/dialogue-export", { method: "POST", body: form });
-    if (!res.ok) throw new Error("書き出しの開始に失敗しました (" + res.status + ")");
+    if (!res.ok) throw await responseError(res, "error.export_start");
     const { id } = await res.json();
     const job = await pollDialogueJob(id);
 
@@ -2129,7 +2181,7 @@ async function runDialogueExportFiles() {
     a.href = job.zip_url;
     a.download = `${baseFilename}_dialogue.zip`;
     a.click();
-    flashInfo(`書き出しが完了しました (${job.segments.length}件) — ZIPをダウンロードしています`);
+    flashInfo(t("toast.dialogue_exported", { count: job.segments.length }));
   } catch (err) {
     showError(err.message);
   } finally {
@@ -2164,11 +2216,11 @@ function updateMoveSelect() {
   const sel = $("tool-move");
   const hasSel = !!selection && activeTrackIdx >= 0 && !editorBusy;
   sel.disabled = !hasSel;
-  let html = '<option value="">➜ 移動先…</option>';
+  let html = `<option value="">${t("tool.move_target")}</option>`;
   if (hasSel) {
-    tracks.forEach((t, i) => {
-      if (i === activeTrackIdx || t.isOriginal) return;
-      html += `<option value="${i}">➜ ${t.label} へ移動</option>`;
+    tracks.forEach((track, i) => {
+      if (i === activeTrackIdx || track.isOriginal) return;
+      html += `<option value="${i}">${t("tool.move_option", { label: track.label })}</option>`;
     });
   }
   if (sel.innerHTML !== html) sel.innerHTML = html;
@@ -2205,9 +2257,7 @@ $("tool-autoscale").addEventListener("click", () => {
   localStorage.setItem("ssAutoScale", autoScale ? "1" : "0");
   $("tool-autoscale").classList.toggle("active", autoScale);
   requestViewRefresh();
-  flashInfo(autoScale
-    ? "波形表示を自動拡大します (実際の音量は変わりません)"
-    : "波形を実際の振幅で表示します");
+  flashInfo(autoScale ? t("toast.autoscale_on") : t("toast.autoscale_off"));
 });
 $("tool-autoscale").classList.toggle("active", autoScale);
 
@@ -2221,9 +2271,7 @@ $("tool-specview").addEventListener("click", () => {
   localStorage.setItem("ssViewMode", viewMode);
   $("tool-specview").classList.toggle("active", viewMode === "spec");
   requestViewRefresh();
-  flashInfo(viewMode === "spec"
-    ? "スペクトログラム表示 — 縦=周波数(上が高音)、明るさ=音量。ハムは横線、クリックは縦線に見えます"
-    : "波形表示に戻しました");
+  flashInfo(viewMode === "spec" ? t("toast.spec_on") : t("toast.wave_back"));
 });
 $("tool-specview").classList.toggle("active", viewMode === "spec");
 
@@ -2265,20 +2313,19 @@ $("tool-midi").addEventListener("click", openMidiPanel);
 $("md-run").addEventListener("click", runMidiExport);
 $("md-sens").addEventListener("input", (e) => {
   const v = parseFloat(e.target.value);
-  $("md-sens-val").textContent = v < 0.4 ? "高 (音を多く拾う)" : v > 0.6 ? "低 (確実な音のみ)" : "標準";
+  $("md-sens-val").textContent = v < 0.4 ? t("midi.sens_high") : v > 0.6 ? t("midi.sens_low") : t("midi.sens_standard");
 });
 $("ss-kind").addEventListener("change", () => {
-  $("ss-note").textContent = $("ss-kind").value === "drums"
-    ? "ドラム系のトラックに使ってください。元のトラックは残ります (ミュートされます)。初回はモデルのダウンロードがあります (約170MB)"
-    : "ボーカル・話し声系のトラックに使ってください。リードボーカルとバックコーラス・ハモリに分かれます。初回はモデルのダウンロードがあります (約900MB)";
+  $("ss-note").textContent = t($("ss-kind").value === "drums" ? "panel.ss.note_drums" : "panel.ss.note_vocals");
 });
-document.querySelectorAll(".guide-open").forEach((b) =>
-  b.addEventListener("click", () => {
-    const target = b.dataset.panel;
-    if (target === "panel-dialogue") openDialoguePanel();
-    else togglePanel(target);
-  })
-);
+// ガイド内のボタンは data-i18n-html で再構築されるため、document 宛の委譲で拾う
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".guide-open");
+  if (!b) return;
+  const target = b.dataset.panel;
+  if (target === "panel-dialogue") openDialoguePanel();
+  else togglePanel(target);
+});
 $("tool-silence-cut").addEventListener("click", () => togglePanel("panel-silence-cut"));
 $("tool-denoise").addEventListener("click", () => togglePanel("panel-denoise"));
 $("tool-repair").addEventListener("click", () => togglePanel("panel-repair"));
@@ -2296,7 +2343,7 @@ $("rp-effect").addEventListener("change", () => {
   $("rp-lufs-row").classList.toggle("hidden", v !== "loudnorm" || $("rp-platform").value !== "custom");
   $("rp-pitch-row").classList.toggle("hidden", v !== "pitchshift");
   $("rp-tempo-row").classList.toggle("hidden", v !== "tempo");
-  $("rp-note").textContent = REPAIR_NOTES[v] || "";
+  $("rp-note").textContent = REPAIR_NOTES[v] ? t(REPAIR_NOTES[v]) : "";
 });
 $("dg-diarize").addEventListener("change", () => {
   $("dg-spk-row").classList.toggle("hidden", !$("dg-diarize").checked);
@@ -2416,11 +2463,11 @@ function downloadTrack(track) {
 }
 
 function updateZipBtn() {
-  const n = tracks.filter((t) => t.exportChecked).length;
+  const n = tracks.filter((track) => track.exportChecked).length;
   const btn = $("zip-btn");
-  btn.textContent = `⬇ 選択ステム保存 (${n})`;
+  btn.textContent = t("editor.zip_btn_count", { n });
   btn.disabled = n === 0;
-  btn.title = n === 1 ? "チェックした1ステムをWAVで保存" : "チェックしたステムをZIPで一括保存 (💾で選択)";
+  btn.title = n === 1 ? t("editor.zip_title_one") : t("editor.zip_title_multi");
 }
 
 $("zip-btn").addEventListener("click", () => {
@@ -2471,7 +2518,7 @@ function saveProject() {
   a.download = `${baseFilename}.ssproj`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  flashInfo("プロジェクトを保存しました — このファイルをドロップすると編集を再開できます");
+  flashInfo(t("toast.project_saved"));
 }
 $("save-proj-btn").addEventListener("click", saveProject);
 
@@ -2481,7 +2528,7 @@ function parseZip(bytes) {
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65536); i--) {
     if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
   }
-  if (eocd < 0) throw new Error("プロジェクトファイルを認識できません");
+  if (eocd < 0) throw new Error(t("error.proj_unrecognized"));
   const count = dv.getUint16(eocd + 10, true);
   let off = dv.getUint32(eocd + 16, true);
   const entries = new Map();
@@ -2495,7 +2542,7 @@ function parseZip(bytes) {
     const commentLen = dv.getUint16(off + 32, true);
     const lho = dv.getUint32(off + 42, true);
     const name = dec.decode(bytes.subarray(off + 46, off + 46 + nameLen));
-    if (method !== 0) throw new Error("このアプリで保存した .ssproj ファイルを使ってください");
+    if (method !== 0) throw new Error(t("error.proj_wrong_app"));
     const lNameLen = dv.getUint16(lho + 26, true);
     const lExtraLen = dv.getUint16(lho + 28, true);
     const dataOff = lho + 30 + lNameLen + lExtraLen;
@@ -2510,12 +2557,12 @@ async function loadProject(file) {
   uploadView.classList.add("hidden");
   progressView.classList.remove("hidden");
   $("progress-filename").textContent = file.name;
-  $("progress-message").textContent = "プロジェクトを読み込み中...";
+  $("progress-message").textContent = t("status.loading_project");
   $("progress-percent").textContent = "";
   try {
     const entries = parseZip(new Uint8Array(await file.arrayBuffer()));
     const projRaw = entries.get("project.json");
-    if (!projRaw) throw new Error("プロジェクトファイルが壊れています (project.json がありません)");
+    if (!projRaw) throw new Error(t("error.proj_broken"));
     const proj = JSON.parse(new TextDecoder().decode(projRaw));
     baseFilename = proj.baseFilename || file.name.replace(/\.[^.]+$/, "");
     currentJobMetadata = proj.separation || null;
@@ -2524,7 +2571,7 @@ async function loadProject(file) {
     const buffers = await Promise.all(
       proj.tracks.map(async (t, i) => {
         const data = entries.get(`track_${i}.wav`);
-        if (!data) throw new Error(`音声データが見つかりません (track_${i}.wav)`);
+        if (!data) throw new Error(t("error.proj_track_missing", { file: `track_${i}.wav` }));
         return audioCtx.decodeAudioData(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
       })
     );
@@ -2556,7 +2603,7 @@ async function loadProject(file) {
     updateToolbar();
     updateZipBtn();
     requestAnimationFrame(() => refreshAll());
-    flashInfo(`プロジェクトを読み込みました (${tracks.length}トラック)`);
+    flashInfo(t("toast.project_loaded", { count: tracks.length }));
   } catch (err) {
     showError(err.message);
     resetToUpload();
